@@ -97,16 +97,16 @@ private:
     /* Search for biased BGR values
    ---------------------------- */
 
-	int NeuQuant::contest(const int b, const int g, const int r);
+	int contest(const int b, const int g, const int r);
     /* Move neuron i towards biased (b,g,r) by factor alpha
        ---------------------------------------------------- */
 
-	void NeuQuant::altersingle(const int alpha, const int i, const int b, const int g, const int r, const int div);
+	void altersingle(const int alpha, const int i, const int b, const int g, const int r, const int div);
 
     /* Move adjacent neurons by precomputed alpha*(1-((i-j)^2/[r]^2)) in radpower[|i-j|]
        --------------------------------------------------------------------------------- */
 
-	void NeuQuant::alterneigh(int rad, int i, int b, int g, int r);
+	void alterneigh(int rad, int i, int b, int g, int r);
 
 };
 /* Program Skeleton
