@@ -17,7 +17,7 @@
 #pragma region TASK_STRUCT
 NeuQuantTask::NeuQuantTask(const int width, const int height) {
     factor = 0;
-    token = nullptr;
+    cancel = nullptr;
     nextTask = nullptr;
     thisTask = nullptr;
     colorMap = nullptr;
@@ -41,11 +41,11 @@ bool NeuQuantTask::setSize(const int width, const int height) {
 }
 
 bool NeuQuantTask::alloc(int needSize) {
-    if (m_allocSize >= (needSize *= lengthcount)) 
+    if (m_allocSize >= (needSize *= lengthcount))
         return false; // already allocated enough
     void* tryalloc = m_allocSize <= 0 // try allocate or reallocate
-        ? malloc(m_allocSize = needSize) 
-        : realloc(thepicture, m_allocSize = needSize); 
+        ? malloc(m_allocSize = needSize)
+        : realloc(thepicture, m_allocSize = needSize);
     if (tryalloc == nullptr)
         return true; // failed to allocate memory
     thepicture = (uint8_t*)tryalloc;
@@ -88,7 +88,7 @@ bool NeuQuantTask::convertToBGR(GifEncoderPixelFormat format, uint8_t* dst, cons
 bool NeuQuantTask::getColorMap(const int quality) {
     colorMap = GifMakeMapObject(256, nullptr);
     neuquant.initnet(); // Initializes the neural network with random weights.
-    if (neuquant.learn(thepicture, lengthcount, quality, samplepixels, factor, token)) // Trains the neural network on input image colors.
+    if (neuquant.learn(thepicture, lengthcount, quality, samplepixels, factor, cancelType, cancel)) // Trains the neural network on input image colors.
         return true; // cancelled
     neuquant.unbiasnet(); // Adjusts the trained network to compensate for bias introduced during training.
     neuquant.inxbuild(); // Constructs an indexed lookup table for faster nearest-neighbor searches.
@@ -100,15 +100,15 @@ bool NeuQuantTask::getRasterBits(uint8_t* pixels) {
     const int pix = m_frameWidth * m_frameHeight; // get frame pixel count
     rasterBits = (GifByteType*)malloc(pix); // allocate raster bits
     transIndex = transR < 0 ? NO_TRANSPARENT_COLOR : neuquant.inxsearch(transB, transG, transR); // get transparent index
-    if (token == nullptr) {
+    if (cancel == nullptr) {
         // without cancellation token:
         for (int i = 0; i < pix; getRasterPix(pixels, i++));
         return false; // finished
     }
     // with cancellation token:
-    auto& tokenR = *token; // dereference the token
+    //auto& tokenR = *cancel; // dereference the token
     for (int i = 0, y = m_frameHeight; y > 0; --y) {
-        if (tokenR.IsCancellationRequested)
+        if (isCancel(cancelType, cancel))
             return true; // cancelled
         for (int x = m_frameWidth; x > 0; --x)
             getRasterPix(pixels, i++);
@@ -119,7 +119,7 @@ bool NeuQuantTask::getRasterBits(uint8_t* pixels) {
 
 #pragma region ORIGINAL_COMPATIBILITY
 bool GifEncoder::open(const std::string& file, const int width, const int height,
-                      const int quality, const bool useGlobalColorMap, const int16_t loop, const int preAllocSize, System::Threading::CancellationToken* token) {
+                      const int quality, const bool useGlobalColorMap, const int16_t loop, const int preAllocSize, bool cancelType, void* cancel) {
     if (initOpen(file, width, height))
         return true; // failed to open
     m_quality = quality; // remember quality
@@ -128,24 +128,27 @@ bool GifEncoder::open(const std::string& file, const int width, const int height
     auto& task = *data_push; // dereference the data_push task
     if (preAllocSize > 0) // preallocate the frame buffer
         task.alloc(preAllocSize);
-    task.token = token; // set the task's cancel token
+    task.cancelType = cancelType;
+    task.cancel = cancel; // set the task's cancel token
     task.setSize(width, height); // set the task size
     task.samplepixels = samplepixels = getSamplePixels(task); // calculate the samplepixels
     factorize(task); // find a balanced factor of samplepixels
     return endOpen(task, loop);
 }
-bool GifEncoder::push(const GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, const int frameIndex, System::Threading::CancellationToken* token) {
+
+#define UpdateCancel(cancelType, cancel) if (cancel != nullptr) { task.cancel = cancel; task.cancelType = cancelType; }
+
+bool GifEncoder::push(const GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, const int frameIndex, bool cancelType, void* cancel) {
     if (m_gifFile == nullptr || frame == nullptr || m_parallel)
         return abort(true); // no file or no image or opened parallel - fail
     if (!m_useGlobalColorMap) // local color map branch:
-        return setupTask(nextEncode(frameIndex, width, height), format, frame, width, height, delay, token); // setup the task with all the supplied data
+        return setupTask(nextEncode(frameIndex, width, height), format, frame, width, height, delay, cancelType, cancel); // setup the task with all the supplied data
     auto& task = *data_push; // dereference the data_push task 
     if (task.setSize(width, height)) // set the task's size
         return abort(true); //throw std::runtime_error("Frame size must be same when use global color map!");
     if (transparent) // set the tasks's transparency
         task.setTransparent(transB, transG, transR);
-    if (token != nullptr) // update the task's cancel token
-        task.token = token;
+    UpdateCancel(cancelType, cancel) // update the task's cancel token
     int fi = frameIndex < 0 ? m_frameCount : frameIndex; // get the frame index of this frame (automatic or manual)
     int allocateframes = fi > m_frameCount ? fi : m_frameCount; // how much memory needs to be allocated for this?
     if (task.alloc(allocateframes + 1) || !task.convertToBGR(format, task.thepicture + task.lengthcount * fi, frame)) // allocate the memory until the last byte of this frame and try to convert into BGR
@@ -155,22 +158,21 @@ bool GifEncoder::push(const GifEncoderPixelFormat format, uint8_t* frame, const 
     return true; // success
 }
 
-bool GifEncoder::close(System::Threading::CancellationToken* token) {
+bool GifEncoder::close(bool cancelType, void* cancel) {
     if (m_gifFile == nullptr)
         return abort(true); // file not opened - fail
     if (m_parallel) // if parallel mode, just mark the last task as finished wihtout starting it, that will let the tryWrite know it's the end
-        return data_push->finished = true; 
-    auto& write = *data_write; // dereference the data_write task
+        return data_push->finished = true;
+    auto& task = *data_write; // dereference the data_write task
     if (m_useGlobalColorMap) { // encode the whole gif here if global map (this is why I can't parallelize this)
-        if (token != nullptr) // update the task's cancel token
-            write.token = token;
-        factorize(write); // if we supplied token just now, calculate the missing factor
-        write.getColorMap(m_quality); // get global color map of the whole animation
-        m_gifFile->SColorMap = write.colorMap;
+        UpdateCancel(cancelType, cancel) // update the task's cancel token
+        factorize(task); // if we supplied token just now, calculate the missing factor
+        task.getColorMap(m_quality); // get global color map of the whole animation
+        m_gifFile->SColorMap = task.colorMap;
         // write all the global map frames into the file:
         for (int i = 0; i < m_frameCount; ++i) { // raster and encode all the frames
-            write.getRasterBits(write.thepicture + write.lengthcount * i);
-            encodeFrame(write, m_allFrameDelays[i]); // encode the frame
+            task.getRasterBits(task.thepicture + task.lengthcount * i);
+            encodeFrame(task, m_allFrameDelays[i]); // encode the frame
         }
     } else {
         m_parallel = true; // this will allow us to use tryWrite in this closing finalization (it's not allowed to use manually in classic mode)
@@ -193,7 +195,7 @@ bool GifEncoder::close(System::Threading::CancellationToken* token) {
     return ok && (finishedAnimation = true);
 }
 
-bool GifEncoder::setupTask(NeuQuantTask* pushPtr, const GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, System::Threading::CancellationToken* token) {
+bool GifEncoder::setupTask(NeuQuantTask* pushPtr, const GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, bool cancelType, void* cancel) {
     if (pushPtr == nullptr)
         return abort(true); // something must have failed in previous task if its returning null
     auto& task = *pushPtr; // dereference the data_push task
@@ -204,8 +206,7 @@ bool GifEncoder::setupTask(NeuQuantTask* pushPtr, const GifEncoderPixelFormat fo
     }
     if (transparent) // set the task's transparent color
         task.setTransparent(transB, transG, transR);
-    if (token != nullptr) // update the task's cancel token
-        task.token = token;
+    UpdateCancel(cancelType, cancel) // update the task's cancel token
     task.samplepixels = samplepixels; // give the samplepixels to the task
     task.factor = factor; // give the smaplepixels balanced factorization factor to the task
     factorize(task); // if there's a token and the factor is zero, calculate the factor
@@ -247,10 +248,12 @@ bool GifEncoder::abort(const bool fail) {
     if (!fail)
         return true; // do not abourt
     int error;
+    mtx.lock();
     if (m_gifFile != nullptr) // close the file if opened
         EGifCloseFile(m_gifFile, &error);
     freeEverything(); // try to free the data
     m_gifFileHandler = nullptr; // forget the file
+    mtx.unlock();
     reset(); // reset the encoder
     return false; // successfully aborted
 }
@@ -300,37 +303,38 @@ inline void GifEncoder::reset() {
 
 #pragma region EXPANSION
 bool GifEncoder::open_parallel(const std::string& file, const int width, const int height,
-                               const int quality, int16_t loop, System::Threading::CancellationToken* token) {
+                               const int quality, int16_t loop, bool cancelType, void* cancel) {
     if (initOpen(file, width, height)) // open the file
         return true; // open failed
     m_quality = quality; // remember quality
     m_useGlobalColorMap = false; // globa color map dones't work it parallel mode, because i am literally parallel batching the separate local map learnings
     m_parallel = true; // flag that we are running a parallel mode. whis will make any synchronous calls refuse
     auto& task = *data_push; // dereference the data_push
-    task.token = token; // set the task's cancel token
+    task.cancel = cancel; // set the task's cancel token
+    task.cancelType = cancelType;
     task.setSize(width, height); // set the task's size
     task.samplepixels = samplepixels = getSamplePixels(task); // calculate the samplepixels
     factorize(task); // calculate the balanced factorization of samplepixels
     return endOpen(task, loop); // write the file header
 }
 
-bool GifEncoder::push_parallel(GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, const int frameIndex, System::Threading::CancellationToken* token) {
+bool GifEncoder::push_parallel(GifEncoderPixelFormat format, uint8_t* frame, const int width, const int height, const int delay, const int frameIndex, bool cancelType, void* cancel) {
     if (m_gifFile == nullptr || frame == nullptr || !m_parallel)
         return abort(true); // file not opened, or frame invlaid, or not parallel - fail
     mtx.lock(); // lock this fetch for parallelism data integrity
     auto pushPtr = nextEncode(frameIndex, width, height); // fetch the task data struct to run the task from, and make another empty one after that
     mtx.unlock(); // can continue in parallel from here
-    return setupTask(pushPtr, format, frame, width, height, delay, token); // setup the task with all the supplied data
+    return setupTask(pushPtr, format, frame, width, height, delay, cancelType, cancel); // setup the task with all the supplied data
 }
 
 GifEncoderTryWriteResult GifEncoder::tryWrite(bool parallel) {
     GifEncoderTryWriteResult r;
-    if(parallel) // lock if we are calling this in parallel to preserve data integrity
+    if (parallel) // lock if we are calling this in parallel to preserve data integrity
         mtx.lock();
     r = tryWriteInternal(); // call the internal function itself from this public wrapper
     if (r == GifEncoderTryWriteResult::Failed)
         abort(true); // abort if the fucntion failed
-    if (parallel) 
+    if (parallel)
         mtx.unlock();
     return r; // return the function's return
 }
@@ -458,7 +462,7 @@ void GifEncoder::clearTask(NeuQuantTask& task) {
 
 inline void GifEncoder::factorize(NeuQuantTask& task) {
     // factorize the smplepixels if there's a token and the size got changed from the last factorization
-    if (task.token != nullptr && task.factor == 0) {
+    if (task.cancel != nullptr && task.factor == 0) {
         factor = 1; // start with factor 1
         int s = task.samplepixels; // keep factorizing until the factor and smaplepixels get balanced
         for (int t = 2, ft = factor * t, st = s / t; ft - st < s - factor; ft = factor * t, st = s / t) {
