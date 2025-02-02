@@ -16,10 +16,10 @@ void TestEncoder(array<Bitmap^>^ bitmap, const int selectWidth, const int select
 	}
 
 	// BGR/BGRA:
-	se->open("s_bgr_inorder.gif", selectWidth, selectHeight, 1, true, 0);
-	pe->open_parallel("p_bgr_inorder.gif", selectWidth, selectHeight, 1, 0);
-	se_out->open("s_bgr_outoforder.gif", selectWidth, selectHeight, 1, true, 0);
-	pe_out->open_parallel("p_bgr_outoforder.gif", selectWidth, selectHeight, 1, 0);
+	se->open("s_bgr_inorder.gif", selectWidth, selectHeight, 1, false, 0);
+	pe->open_parallel("p_bgr_inorder.gif", selectWidth, selectHeight, 1, false, 0);
+	se_out->open("s_bgr_outoforder.gif", selectWidth, selectHeight, 1, false, 0);
+	pe_out->open_parallel("p_bgr_outoforder.gif", selectWidth, selectHeight, 1, false, 0);
 	for (int i = 0; i < bitmap->Length; l->Add(i++)) {
 		uint8_t* frame_bgr = (uint8_t*)(void*)bgr[i]->Scan0;
 		uint8_t* frame_bgra = (uint8_t*)(void*)bgra[i]->Scan0;
@@ -79,10 +79,10 @@ void TestEncoder(array<Bitmap^>^ bitmap, const int selectWidth, const int select
 			p[3] = s[3];
 		}
 	}
-	se->open("s_rgb_inorder.gif", selectWidth, selectHeight, 1, true, 0);
-	pe->open_parallel("p_rgb_inorder.gif", selectWidth, selectHeight, 1, 0);
-	se_out->open("s_rgb_outoforder.gif", selectWidth, selectHeight, 1, false, 0); // try both false and true global color map
-	pe_out->open_parallel("p_rgb_outoforder.gif", selectWidth, selectHeight, 1, 0);
+	se->open("s_rgb_inorder.gif", selectWidth, selectHeight, 1, false, 0);
+	pe->open_parallel("p_rgb_inorder.gif", selectWidth, selectHeight, 1, false, 0);
+	se_out->open("s_rgb_outoforder.gif", selectWidth, selectHeight, 1, false, 0);
+	pe_out->open_parallel("p_rgb_outoforder.gif", selectWidth, selectHeight, 1, false, 0);
 	for (int i = 0; i < bitmap->Length; l->Add(i++)) {
 		// RGB copy:
 		se->push(GifEncoderPixelFormat::PIXEL_FORMAT_RGB, rgb[i], selectWidth, selectHeight, 20);
